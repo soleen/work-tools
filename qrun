@@ -100,18 +100,18 @@ if [[ "$ARCH" == "x86_64" ]]; then
 	if [[ "$IMAGE" == "" ]]; then
 		IMAGE=$HOME/.images/debian_$ARCH-$DEBIAN_RELEASE.img
 	fi
-	if [[ "$2" == "image-create" || ! -f $IMAGE ]]; then
+	if [[ ! -f $IMAGE ]]; then
 		rm -f $IMAGE
-		vm image-create --release=bookworm --image_size=8G -p=$IMAGE
+		mkrootfs -d bookworm -s 8G -o $IMAGE
 	fi
 	KERN=$ARCH/
 elif [[ "$ARCH" == "arm64" ]]; then
 	if [[ "$IMAGE" == "" ]]; then
 		IMAGE=$HOME/.images/debian_$ARCH-$DEBIAN_RELEASE.img
 	fi
-	if [[ "$2" == "image-create" || ! -f $IMAGE ]]; then
+	if [[ ! -f $IMAGE ]]; then
 		rm -f $IMAGE
-		vm image-create --release=bookworm --arch=arm64 --image_size=8G -p=$IMAGE
+		mkrootfs -d bookworm -s 8G -a arm64 -o $IMAGE
 	fi
 	KERN=$ARCH/
 else
@@ -121,9 +121,9 @@ else
 	if [[ "$IMAGE" == "" ]]; then
 		IMAGE=$HOME/.images/debian_$ARCH-$DEBIAN_RELEASE.img
 	fi
-	if [[ "$2" == "image-create" || ! -f $IMAGE ]]; then
+	if [[ ! -f $IMAGE ]]; then
 		rm -f $IMAGE
-		vm image-create --release=$DEBIAN_RELEASE --image_size=8G -p=$IMAGE
+		mkrootfs -d $DEBIAN_RELEASE -s 8G -o $IMAGE
 	fi
 	KERN=""
 fi
