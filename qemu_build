@@ -1,0 +1,64 @@
+#!/bin/bash
+# Pasha Tatashin pasha.tatahsin@soleen.com
+# Build static qemu: qemu.tar.bz2
+# Should be unpacked in root dir / : sudo tar xf qemu.tar.bz2 -C /
+set -e
+
+if [[ ! -d libslirp ]]; then
+	git clone https://gitlab.freedesktop.org/slirp/libslirp
+	cd libslirp
+	meson setup -Ddefault_library=both build
+	ninja -Cbuild
+else
+	echo skip building static slirp
+fi
+
+export LDFLAGS="-L$PWD/libslirp/build ${LDFLAGS}"
+
+./configure --target-list=x86_64-softmmu --static	\
+		--prefix=$PWD/qemu			\
+		--firmwarepath=/qemu/share/qemu		\
+		--enable-strip				\
+		--enable-slirp				\
+		--enable-virtfs				\
+		--disable-vnc				\
+		--disable-vnc-{jpeg,sasl}		\
+		--disable-spice				\
+		--disable-alsa				\
+		--disable-opengl			\
+		--disable-selinux			\
+		--disable-auth-pam			\
+		--disable-xen				\
+		--disable-oss				\
+		--disable-gnutls			\
+		--disable-curl				\
+		--disable-gio				\
+		--disable-libudev			\
+		--disable-libdaxctl			\
+		--disable-libusb			\
+		--disable-usb-redir			\
+		--disable-curses			\
+		--disable-debug-info			\
+		--disable-libssh			\
+		--disable-glusterfs			\
+		--disable-seccomp			\
+		--disable-{bzip2,snappy,lzo}		\
+		--disable-smartcard			\
+		--disable-libnfs			\
+		--disable-libiscsi			\
+		--disable-rbd				\
+		--disable-cap-ng			\
+		--disable-linux-aio			\
+		--disable-brlapi			\
+		--disable-rdma				\
+		--disable-fdt				\
+		--disable-sdl				\
+		--disable-gtk				\
+		--disable-tpm				\
+		--disable-vte				\
+		--disable-pixman			\
+
+make -s -j 80
+make install
+tar cjf qemu.tar.bz2 qemu
+rm -rf qemu
