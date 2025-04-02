@@ -1,0 +1,78 @@
+#!/bin/bash
+# Author: Pasha Tatashin <pasha.tatashin@soleen.com>
+set -e
+
+M="x86_64"
+FORCE=0
+
+usage() {
+	cat << EOF
+Usage: $0 [-a ARCH] [-f] [-h]
+
+Builds lightweight with virtualization extensions kernel for ARCH (default: $M)
+outside of source tree. Optioanlly, adds configs in pub/pub.config.
+
+Supported ARCH: x86_64, arm64.
+Auto-configures if ARCH/.config is missing or -f is used.
+
+Options:
+  -a ARCH   Target architecture (x86_64 or arm64). Defaults to $M.
+  -f        Force clean (mrproper) and re-configure the build.
+  -h        Show this help message and exit.
+EOF
+	# Exit with 0 if called via -h, 1 otherwise
+	[[ "$1" == "h" ]] && exit 0 || exit 1
+}
+
+configure_build() {
+	$MAKE mrproper
+	$MAKE defconfig
+	if [ -f pub/pub.config ]; then
+		cat pub/pub.config >> "$M/.config"
+		$MAKE olddefconfig
+	fi
+	$MAKE kvm_guest.config
+}
+
+while getopts "a:fh" o; do
+	case "${o}" in
+		a)
+			M="${OPTARG}"
+			;;
+		f)
+			FORCE=1
+			;;
+		h)
+			usage "h"
+			;;
+		*)
+			usage
+			;;
+	esac
+done
+shift $((OPTIND-1))
+
+if [[ $# -gt 0 ]]; then
+	echo "Error: Unexpected arguments: $*" >&2
+	usage
+fi
+
+if [[ "$M" == "x86_64" ]]; then
+	unset CROSS_COMPILE
+elif [[ "$M" == "arm64" ]]; then
+	export CROSS_COMPILE=aarch64-linux-gnu-
+else
+	echo "Error: Invalid architecture '$M'. Please use 'x86_64' or 'arm64'." >&2
+	usage # Exit with usage help
+fi
+
+# Define the base make command
+MAKE="make -k O=$M ARCH=$M -s -j $(nproc)"
+CONFIG_PATH="$M/.config"
+
+if [[ "$FORCE" == "1" || ! -f "$CONFIG_PATH" ]]; then
+	mkdir -p "$M"
+	configure_build
+fi
+
+time $MAKE
