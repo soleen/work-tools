@@ -1,0 +1,160 @@
+#!/bin/bash
+# Author: Pasha Tatashin <pasha.tatashin@soleen.com>
+set -e
+
+qemu_args=(
+	-name "qrunvm"
+	-nographic
+	-no-reboot
+	-virtfs "local,path=/,mount_tag=hostfs,security_model=none,multidevs=remap"
+	-machine "q35"
+	-serial "mon:stdio"
+)
+
+network_args=(
+	-s
+	-net "nic,model=virtio-net-pci"
+	-net "user,hostfwd=tcp::5555-:22"
+	-qmp "tcp:localhost:4444,server,nowait"
+)
+
+x86_64_args=(
+	-enable-kvm
+	-bios "qboot.rom"
+	-machine "q35"
+	-cpu "host"
+)
+
+arm64_args=(
+	-machine virt
+	-cpu "cortex-a57"
+)
+
+QEMU=""
+KPARAM=""
+NCPU=4
+MEM=8G
+IMAGE=""
+NETWORK=true
+
+DEFAULT_ARCH="x86_64"
+ARCH=""
+
+usage() {
+    echo "Usage: $0 [-k <append_kernel_cmd>] [-m MEM] [-c NCPU] [-a ARCH] [-N] [-i image] [-q qemu_exec] [-- qemu_options]"
+    echo "  -k <append_kernel_cmd> Extra parameters to append to the kernel command line."
+    echo "  -m MEM                   Amount of RAM for the VM (e.g., 4G, 512M). Default: $MEM"
+    echo "  -c NCPU                  Number of CPU cores. Default: $NCPU"
+    echo "  -a ARCH                  Target architecture (e.g., x86_64, arm64). Default: $DEFAULT_ARCH"
+    echo "  -N                       Disable the network configuration."
+    echo "  -i image                 Optional path to the boot image file."
+    echo "  -q qemu_exec             QEMU executable ). Default: qemu-system-$DEFAULT_ARCH"
+    echo "  -- qemu_options          Additional arguments passed directly to QEMU."
+    exit 1
+}
+
+while getopts "k:m:c:a:Ni:q:h" o; do
+	case "${o}" in
+	k)
+		KPARAM+=" ${OPTARG}"
+		;;
+	m)
+		MEM=${OPTARG}
+		;;
+	c)
+		NCPU=${OPTARG}
+		;;
+	a)
+		ARCH=${OPTARG}
+		;;
+	N)
+		NETWORK=false
+		;;
+	i)
+		IMAGE=${OPTARG}
+		;;
+	q)
+		QEMU=${OPTARG}
+		;;
+	h)
+		usage
+		;;
+        \?)
+		usage
+		;;
+	esac
+done
+
+shift $((OPTIND-1))
+
+# skip --
+if [[ "$1" == "--" ]]; then
+    shift
+fi
+
+extra_args+=("$@")
+
+DEBIAN_RELEASE=bookworm
+
+if [[ "$ARCH" == "x86_64" ]]; then
+	if [[ "$IMAGE" == "" ]]; then
+		IMAGE=$HOME/.images/debian_$ARCH-$DEBIAN_RELEASE.img
+	fi
+	if [[ "$2" == "image-create" || ! -f $IMAGE ]]; then
+		rm -f $IMAGE
+		vm image-create --release=bookworm --image_size=8G -p=$IMAGE
+	fi
+	KERN=$ARCH/
+elif [[ "$ARCH" == "arm64" ]]; then
+	if [[ "$IMAGE" == "" ]]; then
+		IMAGE=$HOME/.images/debian_$ARCH-$DEBIAN_RELEASE.img
+	fi
+	if [[ "$2" == "image-create" || ! -f $IMAGE ]]; then
+		rm -f $IMAGE
+		vm image-create --release=bookworm --arch=arm64 --image_size=8G -p=$IMAGE
+	fi
+	KERN=$ARCH/
+else
+	DEBIAN_RELEASE=trixie
+	ARCH=x86_64
+
+	if [[ "$IMAGE" == "" ]]; then
+		IMAGE=$HOME/.images/debian_$ARCH-$DEBIAN_RELEASE.img
+	fi
+	if [[ "$2" == "image-create" || ! -f $IMAGE ]]; then
+		rm -f $IMAGE
+		vm image-create --release=$DEBIAN_RELEASE --image_size=8G -p=$IMAGE
+	fi
+	KERN=""
+fi
+
+if [[ "$ARCH" == "x86_64" ]]; then
+	qemu_args+=("${x86_64_args[@]}")
+	KPARAM+=" console=ttyS0,115200 root=/dev/sda earlyprintk=ttyS0"
+	KERN=${KERN}arch/x86/boot/bzImage
+else
+	qemu_args+=("${arm64_args[@]}")
+	KPARAM+=" console=ttyAMA0,115200 root=/dev/vda"
+	KERN=${KERN}arch/arm64/boot/Image
+fi
+
+if [[ "$QEMU" == "" ]]; then
+	QEMU="qemu-system-$ARCH"
+fi
+
+qemu_args+=(-m "$MEM")
+qemu_args+=(-smp "$NCPU")
+
+if [[ $NETWORK == true ]]; then
+	qemu_args+=("${network_args[@]}")
+fi
+
+qemu_args+=("${extra_args[@]}")
+qemu_args+=(-drive "file=$IMAGE,format=raw")
+qemu_args+=(-kernel "$KERN")
+qemu_args+=(-append "$KPARAM rw")
+
+printf " %s" "$QEMU" "${qemu_args[@]}"
+echo
+
+$QEMU "${qemu_args[@]}"
