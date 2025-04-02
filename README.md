@@ -67,3 +67,55 @@ If a file named `pub/pub.config` exists in the top-level source directory when t
         kbuild
         ```
         Explanation: This defaults to `-a x86_64`. Since `x86_64/.config` does not exist yet, the script automatically runs the full configuration sequence (including merging `pub/pub.config` if it exists) and then starts the build.
+
+## `mkrootfs` Script
+
+### Purpose
+
+This script automates the creation of a bootable Debian disk image (`.img`) using `mmdebstrap`. The resulting image is tailored for use in virtual machines (like QEMU), pre-configured with essential tools, SSH access, basic networking, and other useful settings for development and testing.
+
+### Dependencies
+
+The script requires `sudo` privileges to run and relies on the following key packages being installed on the host system:
+
+* `mmdebstrap`: For bootstrapping the Debian system.
+* `qemu-utils`: Provides `qemu-img` for creating the disk image file.
+* `e2fsprogs`: Provides `mkfs` (specifically `mkfs.ext4`) for formatting the image.
+* Standard Linux utilities: `mount`, `umount`, `mkdir`, `rmdir`, `cat`, `tee`, `sed`, `sync`, `mountpoint`, `nice`, etc.
+
+### Usage
+
+```bash
+mkrootfs -o <output-image-file> [-d <release>] [-a <arch>] [-s <size>] [-h]
+```
+
+### Options
+
+* `-o <file>`: **Mandatory.** Specifies the filename for the output disk image (e.g., `debian-bookworm.img`). The script will exit if the file already exists.
+* `-d <name>`: Specify the Debian release codename to bootstrap (e.g., `bookworm`, `bullseye`). (Default: `bookworm`)
+* `-a <arch>`: Specify the target architecture using Debian's naming convention (e.g., `amd64`, `arm64`). (Default: `amd64`)
+* `-s <size>`: Set the total size of the disk image (e.g., `8G`, `10G`, `20G`). (Default: `8G`)
+* `-h`: Display the help message and exit.
+
+### Image Configuration Details
+
+The script performs several configurations on the bootstrapped Debian system:
+
+* **Installed Packages:** Installs a base system plus common development and debugging tools, including: `ssh`, `acpid`, `gdb`, `systemtap`, `strace`, `vim`, `bpftool`, `bpftrace`, `trace-cmd`, `linux-perf`, `pciutils`, `psmisc`, `file`, etc. (See the `PACKAGES` variable in the script for the complete list).
+* **SSH Access:**
+    * Configures the SSH daemon (`sshd_config`) to allow root login via public key and password (`PermitRootLogin yes`, `PasswordAuthentication yes`). **Note:** These are permissive settings suitable for testing VMs.
+    * Copies the public SSH key found at `$HOME/.ssh/id_rsa.pub` (by default) on the host machine to `/root/.ssh/authorized_keys` inside the image, enabling passwordless root login via that key. Ensure this key exists or modify the `SSH_PUB_KEY` variable in the script.
+* **Networking:**
+    * Enables `systemd-networkd`.
+    * Creates a network configuration file (`/etc/systemd/network/80-dhcp.network`) to enable DHCP on interfaces named `en*`.
+    * Sets the DNS server to `8.8.8.8` in `/etc/resolv.conf`.
+* **Hostname:** Sets the hostname within the image (Default: `liveupdate-vm`).
+* **Serial Console Autologin:** Modifies the `serial-getty@.service` unit file to automatically log in the `root` user on the `ttyS0` serial console.
+* **Filesystem Table (`fstab`):** Adds an entry for mounting a potential 9p filesystem (often used for host directory sharing in QEMU) named `hostfs` at the `/host` mount point within the image.
+* **Enabled Services:** Enables `sshd`, `systemd-networkd`, and `acpid` services to start on boot.
+
+### Example
+```
+# Create a default Debian bookworm amd64 image
+mkrootfs -o pub/bookworm.img -s 8G
+```
