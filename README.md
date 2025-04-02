@@ -1,7 +1,7 @@
 # work-tools
 Tools to develop kernel, and test it in virtual machines.
 - `kbuild` builds it
-- `create-image` creates a rootfs image
+- `mkrootfs` creates a rootfs image
 - `qrun` Runs a qemu image with the built kernel and created rootfs image.
 
 ## `kbuild` Script
@@ -119,3 +119,57 @@ The script performs several configurations on the bootstrapped Debian system:
 # Create a default Debian bookworm amd64 image
 mkrootfs -o pub/bookworm.img -s 8G
 ```
+## `qrun` Script
+
+### Purpose
+
+This script acts as a convenient wrapper for launching QEMU virtual machines, primarily intended for testing custom-built Linux kernels. It sets up common QEMU options, networking, filesystem sharing, and architecture-specific parameters, simplifying the QEMU command line. It now integrates with the `mkrootfs` script to automatically create a suitable Debian root disk image if one doesn't exist at the specified path.
+
+### Dependencies
+
+* **QEMU:** Requires `qemu-system-x86_64` and/or `qemu-system-arm64` to be installed and in the system's `PATH`, or specified via the `-q` option.
+* **(x86_64 Optional):** The default configuration uses `-bios "qboot.rom"`. Ensure this BIOS file is available to QEMU if using the default x86_64 setup.
+* **Kernel Image:** A compiled kernel image (`bzImage` for x86_64, `Image` for arm64) needs to be available. The script expects it at a path relative to the current working directory, typically matching the output structure of `kbuild` (e.g., `x86_64/arch/x86/boot/bzImage` or `arm64/arch/arm64/boot/Image`).
+* **Root Disk Image OR `mkrootfs`:**
+    * EITHER a suitable pre-existing root filesystem image (see `-i` option and default path).
+    * OR the `mkrootfs` script (assumed to be in the `PATH` or same directory) and *its* dependencies (`mmdebstrap`, `qemu-utils`, `e2fsprogs`, `sudo`, etc.) to allow for automatic image creation if the specified image file is not found.
+
+### Usage
+
+```bash
+qrun [-k <append_kernel_cmd>] [-m MEM] [-c NCPU] [-a ARCH] [-N] [-i image] [-q qemu_exec] [-h] [-- qemu_options]
+```
+### Options
+
+* `-k <append_kernel_cmd>`: Append extra parameters to the kernel command line string (e.g., `-k "debug loglevel=7"`).
+* `-m MEM`: Specify the amount of RAM for the virtual machine (e.g., `4G`, `8192M`). (Default: `8G`)
+* `-c NCPU`: Set the number of CPU cores for the virtual machine. (Default: `4`)
+* `-a ARCH`: Define the target architecture (`x86_64` or `arm64`). (Default: `x86_64`)
+* `-N`: Disable the script's default network configuration (no `-net nic`, `-net user`, `-qmp`, or `-s`).
+* `-i <image>`: Specify the path to the root disk image file to use. (Default: `$HOME/.images/debian_ARCH-RELEASE.img`, e.g., `$HOME/.images/debian_x86_64-bookworm.img`)
+* `-q <qemu_exec>`: Specify the path to the QEMU executable. (Default: `qemu-system-ARCH`, e.g., `qemu-system-x86_64`)
+* `-h`: Display the help message and exit.
+* `-- <qemu_options>`: Any arguments placed after a double dash (`--`) are passed directly to the underlying QEMU command line, bypassing the script's parsing.
+
+### Default VM Configuration
+
+Unless overridden by options, `qrun` sets up the VM with:
+
+* **General:**
+    * Runs headless (`-nographic`) with the serial console connected to stdio (`-serial mon:stdio`).
+    * Exits QEMU when the guest shuts down (`-no-reboot`).
+    * Sets the VM name to `qrunvm` (`-name "qrunvm"`).
+* **Filesystem Sharing:**
+    * Shares the host's root filesystem (`/`) using virtfs (`-virtfs local,path=/,mount_tag=hostfs,...`). This can typically be mounted inside the guest using `mount -t 9p -o trans=virtio hostfs /host`.
+* **Networking (Enabled by default, disable with `-N`):**
+    * Attaches a `virtio-net-pci` network interface (`-net nic,...`).
+    * Uses QEMU's user-mode networking (`-net user,...`).
+    * Forwards host TCP port `5555` to guest port `22` (SSH) (`hostfwd=tcp::5555-:22`).
+    * Enables the QEMU Machine Protocol (QMP) server on TCP port `4444` (`-qmp tcp:localhost:4444,...`).
+    * Includes `-s`, which is shorthand for enabling a GDB server stub (`-gdb tcp::1234`).
+* **Architecture Specifics:**
+    * **`x86_64`:** Enables KVM hardware acceleration (`-enable-kvm`), uses the `q35` machine type, attempts to pass through the host CPU features (`-cpu host`), and uses `qboot.rom` as the BIOS. Appends `console=ttyS0... root=/dev/sda...` to the kernel command line. Expects kernel image `bzImage`.
+    * **`arm64`:** Uses the `virt` machine type and `cortex-a57` CPU model. Appends `console=ttyAMA0... root=/dev/vda...` to the kernel command line. Expects kernel image `Image`.
+* **Disk Image (`-i`):** Uses the image specified via `-i`, or defaults to a path like `$HOME/.images/debian_x86_64-bookworm.img`. See note below regarding automatic creation.
+* **Kernel (`-kernel`):** Uses the kernel image found relative to the current directory (e.g., `x86_64/arch/x86/boot/bzImage`).
+* **Kernel Command Line (`-append`):** Includes `rw` and architecture-specific `root=` and `console=` parameters, plus any extra arguments added via `-k`.
