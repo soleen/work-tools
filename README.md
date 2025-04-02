@@ -33,6 +33,7 @@ If a file named `pub/pub.config` exists in the top-level source directory when t
     ```bash
     git clone git@github.com:googleprodkernel/linux-liveupdate.git
     cd linux-liveupdate
+    git checkout -b luo remotes/origin/luo/rfc-v1
     ```
 
 2.  **Create a custom configuration snippet:**
