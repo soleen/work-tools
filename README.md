@@ -173,3 +173,27 @@ Unless overridden by options, `qrun` sets up the VM with:
 * **Disk Image (`-i`):** Uses the image specified via `-i`, or defaults to a path like `$HOME/.images/debian_x86_64-bookworm.img`. See note below regarding automatic creation.
 * **Kernel (`-kernel`):** Uses the kernel image found relative to the current directory (e.g., `x86_64/arch/x86/boot/bzImage`).
 * **Kernel Command Line (`-append`):** Includes `rw` and architecture-specific `root=` and `console=` parameters, plus any extra arguments added via `-k`.
+
+### Example: Running with Custom QEMU Arguments
+
+This example shows how to invoke `qrun` with specific settings for the QEMU executable, architecture, memory, CPU count, kernel parameters, and a custom disk image. It also demonstrates how to pass complex, specific `-netdev` and `-device` configurations directly to QEMU using the `--` separator.
+
+```bash
+./qrun \
+  -q /qemu/bin/qemu-system-x86_64 \
+  -a x86_64 \
+  -m 16G \
+  -c 8 \
+  -k 'memmap=8G!4G kho_scratch=1G kho=1 liveupdate=1 quiet selinux=0 intel_iommu=on intel_iommu=pt ' \
+  -i pub/bookworm.img \
+  -- \
+  -netdev user,id=PHYS_FUNC0 \
+  -netdev user,id=VF0 \
+  -netdev user,id=VF1 \
+  -netdev user,id=VF2 \
+  -device pcie-root-port,id=BUS0 \
+  -device virtio-net-pci,bus=BUS0,addr=0x0.0x3,netdev=VF2,sriov-pf=PF0 \
+  -device virtio-net-pci,bus=BUS0,addr=0x0.0x2,netdev=VF1,sriov-pf=PF0 \
+  -device virtio-net-pci,bus=BUS0,addr=0x0.0x1,netdev=VF0,sriov-pf=PF0 \
+  -device virtio-net-pci,bus=BUS0,addr=0x0.0x0,netdev=PHYS_FUNC0,id=PF0
+```
