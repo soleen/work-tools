@@ -1,0 +1,250 @@
+#!/bin/bash
+# Strict mode: exit on error, undefined variable, or pipe failure
+set -euo pipefail
+
+# == Default Configuration ==
+ARCH_DEFAULT="amd64" # x86_64 Debian architecture name
+DEBIAN_RELEASE_DEFAULT="bookworm"
+IMG_SIZE_DEFAULT="8G"
+OUTPUT_IMAGE="" # Mandatory - must be provided via -o
+MNT_DIR="mnt"   # Default mount directory name
+# Packages to install via mmdebstrap
+PACKAGES="ssh,acpid,acpi-support-base,gdb,systemtap,file,psmisc,"
+PACKAGES+="strace,vim,bpftool,bpftrace,trace-cmd,linux-perf,pciutils"
+SSH_PUB_KEY="$HOME/.ssh/id_rsa.pub"
+VM_HOSTNAME="liveupdate-vm"
+
+# Print usage instructions and exit
+usage() {
+	echo "Usage: $0 -o <output-image-file> [-d <release>] [-a <arch>] [-s <size>] [-h]"
+	echo ""
+	echo "Options:"
+	echo "  -o <file>   : Output image filename (Mandatory)"
+	echo "  -d <name>   : Debian release codename (Default: $DEBIAN_RELEASE_DEFAULT)"
+	echo "  -a <arch>   : Architecture (Default: $ARCH_DEFAULT)"
+	echo "  -s <size>   : Image size (e.g., 8G, 10G) (Default: $IMG_SIZE_DEFAULT)"
+	echo "  -h          : Display this help message"
+	echo ""
+	echo "Example: $0 -o debian-bookworm.img -d bookworm -s 10G"
+	exit 1
+}
+
+# Cleanup function: ensures unmounting and directory removal
+cleanup() {
+	sync
+	echo "--- Cleaning up ---"
+	if [ -n "${MNT_DIR:-}" ] && [ -d "$MNT_DIR" ] && \
+		mountpoint -q "$MNT_DIR" >/dev/null 2>&1; then
+		echo "Unmounting $MNT_DIR..."
+		sudo umount "$MNT_DIR" || \
+		echo "Warning: Failed to unmount $MNT_DIR. Manual cleanup needed."
+	elif [ -n "${MNT_DIR:-}" ]; then
+		echo "$MNT_DIR not mounted or mount point directory may not exist."
+	fi
+
+	if [ -n "${MNT_DIR:-}" ] && [ -d "$MNT_DIR" ]; then
+		echo "Removing directory $MNT_DIR..."
+		rmdir "$MNT_DIR" || \
+		echo "Warning: Failed to remove $MNT_DIR. Is it empty?"
+	fi
+}
+
+# Check for required commands
+check_commands() {
+	local missing=0
+	local cmd
+
+	for cmd in qemu-img mkfs mmdebstrap sudo mount umount rmdir mkdir cat \
+			tee sed chroot sync mountpoint getopts printf nice; do
+		if ! command -v "$cmd" >/dev/null 2>&1 && [ "$cmd" != "getopts" ]; then
+			echo "Error: Required command '$cmd' not found."
+			missing=1
+		fi
+	done
+
+	if [ "$missing" -eq 1 ]; then
+		exit 1
+	fi
+
+	if ! sudo -v >/dev/null 2>&1; then
+		echo "Error: sudo privileges required or sudo misconfigured."
+		exit 1
+	fi
+}
+
+# --- Argument Parsing with getopts ---
+ARCH="$ARCH_DEFAULT"
+DEBIAN_RELEASE="$DEBIAN_RELEASE_DEFAULT"
+IMG_SIZE="$IMG_SIZE_DEFAULT"
+# OUTPUT_IMAGE starts empty, must be set by -o
+
+while getopts ":a:o:s:d:h" opt; do
+  case $opt in
+    a) ARCH="$OPTARG" ;;
+    o) OUTPUT_IMAGE="$OPTARG" ;;
+    s) IMG_SIZE="$OPTARG" ;;
+    d) DEBIAN_RELEASE="$OPTARG" ;;
+    h) usage ;;
+    \?) echo "Invalid option: -$OPTARG" >&2; usage ;;
+    :) echo "Option -$OPTARG requires an argument." >&2; usage ;;
+  esac
+done
+shift $((OPTIND - 1)) # Remove processed options from arguments
+
+# --- Validate Mandatory Arguments ---
+if [ -z "$OUTPUT_IMAGE" ]; then
+	echo "Error: Output image file (-o) is mandatory." >&2
+	usage
+fi
+
+# Check for unexpected positional arguments
+if [ "$#" -ne 0 ]; then
+	echo "Error: Unexpected positional arguments found: '$@'" >&2
+	usage
+fi
+
+echo "--- Starting Debian Image Creation ---"
+echo "Debian Release: $DEBIAN_RELEASE"
+echo "Architecture:   $ARCH"
+echo "Output Image:   $OUTPUT_IMAGE"
+echo "Image Size:     $IMG_SIZE"
+echo "Mount Point:    $MNT_DIR"
+echo "--------------------------------------"
+
+# --- Pre-flight Checks ---
+check_commands
+
+if [ -e "$OUTPUT_IMAGE" ]; then
+	echo "Error: Output image '$OUTPUT_IMAGE' already exists." >&2
+	echo "Please remove it or choose a different name." >&2
+	exit 1
+fi
+
+if [ -e "$MNT_DIR" ]; then
+	if [ -d "$MNT_DIR" ] && [ -z "$(ls -A "$MNT_DIR")" ]; then
+		echo "Warning: Mount directory '$MNT_DIR' exists but is empty. Reusing."
+	else
+		echo "Error: Mount directory '$MNT_DIR' exists and is not empty" >&2
+		echo "or not a directory. Please remove it or choose a different name." >&2
+		exit 1
+	fi
+fi
+
+if [ ! -f "$SSH_PUB_KEY" ]; then
+	echo "Error: SSH public key '$SSH_PUB_KEY' not found." >&2
+	echo "Adjust SSH_PUB_KEY variable at the top of the script." >&2
+	exit 1
+fi
+
+# --- Setup Trap for Cleanup ---
+trap cleanup EXIT HUP INT TERM
+
+# --- Image and Filesystem Creation ---
+echo "--- Creating image file ($IMG_SIZE) ---"
+qemu-img create "$OUTPUT_IMAGE" "$IMG_SIZE"
+
+echo "--- Formatting image file (ext4) ---"
+mkfs -t ext4 "$OUTPUT_IMAGE"
+
+# --- Mounting ---
+echo "--- Mounting image ---"
+# Only create directory if it doesn't exist (handling reuse case)
+if [ ! -d "$MNT_DIR" ]; then
+	mkdir "$MNT_DIR"
+fi
+sudo mount -o loop "$OUTPUT_IMAGE" "$MNT_DIR"
+# Check mount success
+if ! mountpoint -q "$MNT_DIR"; then
+	echo "Error: Failed to mount '$OUTPUT_IMAGE' on '$MNT_DIR'." >&2
+	exit 1
+fi
+
+# --- Debian Bootstrap ---
+echo "--- Running mmdebstrap (this may take a while) ---"
+# Using nice to lower priority potentially
+sudo nice mmdebstrap --include="$PACKAGES" --arch="$ARCH" \
+	"$DEBIAN_RELEASE" "$MNT_DIR"
+echo "mmdebstrap finished."
+
+# --- System Configuration ---
+echo "--- Configuring system inside chroot ---"
+
+# Enable services
+echo "* Enabling systemd-networkd..."
+sudo chroot "$MNT_DIR" systemctl enable systemd-networkd
+echo "* Enabling acpid..."
+sudo chroot "$MNT_DIR" systemctl enable acpid
+
+# Setup SSH for root
+echo "* Setting up SSH for root..."
+sudo mkdir -p "$MNT_DIR/root/.ssh"
+# Copy public key to standard authorized_keys file
+sudo cp "$SSH_PUB_KEY" "$MNT_DIR/root/.ssh/authorized_keys"
+sudo chmod 700 "$MNT_DIR/root/.ssh"
+sudo chmod 600 "$MNT_DIR/root/.ssh/authorized_keys"
+# Ensure correct ownership inside the chroot context
+sudo chroot "$MNT_DIR" chown -R root:root /root/.ssh
+
+# Configure hostname
+echo "* Setting hostname ($VM_HOSTNAME)..."
+echo "$VM_HOSTNAME" | sudo tee "$MNT_DIR/etc/hostname" > /dev/null
+
+# Configure fstab for host filesystem sharing (if needed via QEMU's 9p)
+echo "* Setting up fstab for 9p host share..."
+# Using printf for reliable formatting, breaking line for length
+printf "%s\t%s\t%s\t%s\t%s\t%s\n" "hostfs" "/host" "9p" \
+	"trans=virtio,rw,nofail" "0" "0" | \
+	sudo tee "$MNT_DIR/etc/fstab" > /dev/null
+
+# Configure basic networking (DNS)
+echo "* Setting up resolv.conf..."
+printf "nameserver 8.8.8.8\n" | \
+	sudo tee "$MNT_DIR/etc/resolv.conf" > /dev/null
+
+# Configure network interface (DHCP for en*)
+echo "* Setting up systemd-networkd for DHCP..."
+cat << EOF | sudo tee "$MNT_DIR/etc/systemd/network/80-dhcp.network" > /dev/null
+[Match]
+Name=en*
+
+[Network]
+DHCP=yes
+EOF
+
+# Configure SSH Daemon
+echo "* Configuring sshd..."
+cat << EOF | sudo tee "$MNT_DIR/etc/ssh/sshd_config" > /dev/null
+# Minimal sshd config for VM testing - includes insecure defaults!
+Port 22
+PermitRootLogin yes
+PasswordAuthentication yes
+# Standard authorized keys file location
+AuthorizedKeysFile .ssh/authorized_keys
+ChallengeResponseAuthentication no
+UsePAM yes
+X11Forwarding yes
+PrintMotd no
+AcceptEnv LANG LC_*
+Subsystem sftp /usr/lib/openssh/sftp-server
+EOF
+
+# Configure autologin on serial console
+echo "* Configuring autologin on serial console (ttyS0)..."
+SERIAL_GETTY_SERVICE_PATH="$MNT_DIR/usr/lib/systemd/system/serial-getty@.service"
+if [ -f "$SERIAL_GETTY_SERVICE_PATH" ]; then
+	new_exec_start="ExecStart=-/sbin/agetty --autologin root -o '-p -f root' --keep-baud 115200,57600,38400,9600 - \$TERM"
+	sed_cmd="s|^ExecStart=.*|$new_exec_start|"
+	sudo sed -i "$sed_cmd" "$SERIAL_GETTY_SERVICE_PATH"
+else
+	echo "Warning: Serial getty service file not found." >&2
+	echo "         Skipping autologin configuration ($SERIAL_GETTY_SERVICE_PATH)." >&2
+fi
+
+echo "--- System configuration finished ---"
+
+# --- Final Steps ---
+# Cleanup (unmount, rmdir) is handled by the trap EXIT
+sync
+echo "--- Debian image created successfully: $OUTPUT_IMAGE ---"
+# Explicitly exit 0 for success if trap didn't catch an error
+exit 0
