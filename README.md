@@ -1,5 +1,8 @@
 # work-tools
-Scripts that I use for work
+Tools to develop kernel, and test it in virtual machines.
+- `kbuild` builds it
+- `create-image` creates a rootfs image
+- `qrun` Runs a qemu image with the built kernel and created rootfs image.
 
 ## `kbuild` Script
 
