@@ -11,7 +11,7 @@ OUTPUT_IMAGE="" # Mandatory - must be provided via -o
 MNT_DIR="mnt"   # Default mount directory name
 # Packages to install via mmdebstrap
 PACKAGES="ssh,acpid,acpi-support-base,gdb,systemtap,file,psmisc,"
-PACKAGES+="strace,vim,bpftool,bpftrace,trace-cmd,linux-perf,pciutils"
+PACKAGES+="strace,vim,bpftool,bpftrace,trace-cmd,linux-perf,pciutils,kexec-tools"
 SSH_PUB_KEY="$HOME/.ssh/id_rsa.pub"
 VM_HOSTNAME="liveupdate-vm"
 
