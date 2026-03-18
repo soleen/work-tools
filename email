@@ -1,0 +1,181 @@
+#!/bin/bash
+
+# Find the root of the kernel git repository based on the current working directory
+KERNEL_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+
+if [[ -z "$KERNEL_ROOT" ]]; then
+    echo "Error: This script must be run from within the kernel git repository."
+    exit 1
+fi
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+
+DRY_RUN=0
+SKIP_CHECKPATCH=0
+SKIP_GET_MAINTAINER=0
+PATCH_DIR=""
+
+usage() {
+    echo "Usage: $0 [OPTIONS] <patch_directory>"
+    echo ""
+    echo "Options:"
+    echo "  -h, --help                 Show this help message and exit"
+    echo "  -d, --dryrun               Do everything except actually sending the emails"
+    echo "  -sc, --skip-checkpatch     Skip running checkpatch.pl"
+    echo "  -sm, --skip-maintainers    Skip running get_maintainer.pl"
+    echo ""
+    echo "Extra Emails:"
+    echo "  Any file named EXTRAEMAILS.* found in the patch directory or its"
+    echo "  parent directory will be parsed for extra email addresses."
+    echo ""
+    echo "Example:"
+    echo "  $0 pub/fixes/v2/"
+}
+
+# Parse arguments
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        -h|--help) usage; exit 0 ;;
+        -d|--dryrun) DRY_RUN=1; shift ;;
+        -sc|--skip-checkpatch) SKIP_CHECKPATCH=1; shift ;;
+        -sm|--skip-maintainers) SKIP_GET_MAINTAINER=1; shift ;;
+        -*) echo "Unknown parameter passed: $1"; usage; exit 1 ;;
+        *)
+            if [[ -z "$PATCH_DIR" ]]; then
+                PATCH_DIR="${1%/}" # Remove trailing slash if present
+            else
+                echo "Too many arguments provided."
+                usage
+                exit 1
+            fi
+            shift
+            ;;
+    esac
+done
+
+if [[ -z "$PATCH_DIR" ]]; then
+    echo "Error: Patch directory is required."
+    usage
+    exit 1
+fi
+
+if [[ ! -d "$PATCH_DIR" ]]; then
+    echo "Error: Directory '$PATCH_DIR' does not exist."
+    exit 1
+fi
+
+# Collect patches
+shopt -s nullglob
+PATCHES=( "$PATCH_DIR"/*.patch )
+shopt -u nullglob
+
+if [ ${#PATCHES[@]} -eq 0 ]; then
+    echo "No patches found in $PATCH_DIR/"
+    exit 1
+fi
+
+echo "The following patches from $PATCH_DIR/ are going to be sent:"
+for p in "${PATCHES[@]}"; do
+    echo "  $(basename "$p")"
+done
+echo ""
+
+if [[ $SKIP_CHECKPATCH -eq 0 ]]; then
+    read -p "Do you want to proceed with checking these patches? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Aborted."
+        exit 1
+    fi
+
+    echo "Running checkpatch.pl..."
+    "$KERNEL_ROOT/scripts/checkpatch.pl" --strict "${PATCHES[@]}"
+    echo ""
+else
+    echo "Skipping checkpatch.pl (--skip-checkpatch used)."
+    echo ""
+fi
+
+read -p "Do you want to proceed with gathering emails? (y/N) " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Aborted."
+    exit 1
+fi
+
+declare -A EMAILS_MAP
+
+if [[ $SKIP_GET_MAINTAINER -eq 0 ]]; then
+    echo "Gathering emails using get_maintainer.pl..."
+    for p in "${PATCHES[@]}"; do
+        # get_maintainer.pl expects diffs, so skip the cover letter
+        if [[ "$p" == *"0000-cover-letter.patch" ]]; then
+            continue
+        fi
+
+        while read -r line; do
+            if [[ -n "$line" ]]; then
+                if [[ "$line" =~ \<([^>]+)\> ]]; then
+                    email_addr="${BASH_REMATCH[1]}"
+                else
+                    email_addr="$line"
+                fi
+                EMAILS_MAP["$email_addr"]=1
+            fi
+        done < <("$KERNEL_ROOT/scripts/get_maintainer.pl" --norolestats "$p")
+    done
+else
+    echo "Skipping get_maintainer.pl (--skip-maintainers used)."
+fi
+
+# Collect extra emails
+PARENT_DIR="$(dirname "$PATCH_DIR")"
+shopt -s nullglob
+EXTRA_EMAIL_FILES=( "$PATCH_DIR"/EXTRAEMAILS.* "$PARENT_DIR"/EXTRAEMAILS.* )
+shopt -u nullglob
+
+for f in "${EXTRA_EMAIL_FILES[@]}"; do
+    echo "Appending extra emails from $f..."
+    while read -r line; do
+        # Ignore empty lines and comments
+        if [[ -n "$line" && ! "$line" =~ ^# ]]; then
+            if [[ "$line" =~ \<([^>]+)\> ]]; then
+                email_addr="${BASH_REMATCH[1]}"
+            else
+                email_addr="$line"
+            fi
+            EMAILS_MAP["$email_addr"]=1
+        fi
+    done < "$f"
+done
+
+echo ""
+echo "The patches will be sent to the following addresses:"
+TO_ARGS=()
+for email in "${!EMAILS_MAP[@]}"; do
+    echo "  $email"
+    TO_ARGS+=( "--to" "$email" )
+done
+echo ""
+
+if [[ ${#TO_ARGS[@]} -eq 0 ]]; then
+    echo "Error: No email addresses were found to send to."
+    exit 1
+fi
+
+if [[ $DRY_RUN -eq 1 ]]; then
+    echo "[DRY RUN] Would execute:"
+    echo "git send-email ${TO_ARGS[@]} ${PATCHES[@]}"
+    exit 0
+fi
+
+read -p "Do you want to proceed with sending these patches? (y/N) " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Aborted."
+    exit 1
+fi
+
+echo "Sending patches..."
+cd "$KERNEL_ROOT" || exit 1
+git send-email "${TO_ARGS[@]}" "${PATCHES[@]}"
