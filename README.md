@@ -197,3 +197,41 @@ This example shows how to invoke `qrun` with specific settings for the QEMU exec
   -device virtio-net-pci,bus=BUS0,addr=0x0.0x1,netdev=VF0,sriov-pf=PF0 \
   -device virtio-net-pci,bus=BUS0,addr=0x0.0x0,netdev=PHYS_FUNC0,id=PF0
 ```
+
+## `email` Script
+
+### Purpose
+
+This script simplifies the process of sending Linux kernel patches using `git send-email`. It automates several common tasks:
+*   Validating patches using `checkpatch.pl`.
+*   Gathering target email addresses using `get_maintainer.pl`.
+*   Including additional email addresses from `EXTRAEMAILS.*` files.
+*   Supporting a "send to self" mode for testing.
+
+### Usage
+
+```bash
+email [OPTIONS] <patch_directory>
+```
+
+### Options
+
+*   `-h, --help`: Show the help message and exit.
+*   `-d, --dryrun`: Do everything except actually sending the emails. Shows the `git send-email` command that would be executed.
+*   `-sc, --skip-checkpatch`: Skip running the kernel's `checkpatch.pl` script.
+*   `-sm, --skip-maintainers`: Skip running `get_maintainer.pl` to gather maintainer emails.
+*   `-me, --to-me`: Skip gathering any emails and only send the patches to yourself (using the email address configured in `git config user.email`).
+
+### Extra Emails
+
+The script automatically looks for files named `EXTRAEMAILS.*` in the patch directory and its parent directory. Any email addresses found in these files (one per line) will be added to the recipient list. Lines starting with `#` are treated as comments and ignored.
+
+### Example
+
+```bash
+# Send patches in pub/fixes/v2/ after running checkpatch and gathering maintainers
+./email pub/fixes/v2/
+
+# Test sending patches to yourself without running checkpatch
+./email -me -sc pub/fixes/v2/
+```
