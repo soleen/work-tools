@@ -92,7 +92,7 @@ if [[ $SKIP_CHECKPATCH -eq 0 ]]; then
     fi
 
     echo "Running checkpatch.pl..."
-    "$KERNEL_ROOT/scripts/checkpatch.pl" --strict "${PATCHES[@]}"
+    "$KERNEL_ROOT/scripts/checkpatch.pl" --no-summary --terse --strict "${PATCHES[@]}"
     echo ""
 else
     echo "Skipping checkpatch.pl (--skip-checkpatch used)."
